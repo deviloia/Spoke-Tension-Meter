@@ -9,4 +9,4 @@
 .externalNativeBuild/
 .cxx/
 # Firebase config: download your own copy from the Firebase Console and place it in app/
-app/google-services.json
+
