@@ -25,17 +25,25 @@ public class MainActivity extends AppCompatActivity {
         Button btnTest = findViewById(R.id.btnTestFirestore);
 
         btnTest.setOnClickListener(v -> {
+<<<<<<< Updated upstream
             tvStatus.setText("connect…");
+=======
+            tvStatus.setText(R.string.status_connecting);
+>>>>>>> Stashed changes
             repository.testConnection(new FirestoreRepository.Callback() {
                 @Override
-                public void onSuccess(String message) {
-                    tvStatus.setText(message);
+                public void onSuccess(String documentId, String message) {
+                    tvStatus.setText(getString(R.string.status_success, documentId, message));
                 }
 
                 @Override
                 public void onError(Exception e) {
                     Log.e(TAG, "Firestore test failed", e);
+<<<<<<< Updated upstream
                     tvStatus.setText("connect fail：" + e.getMessage());
+=======
+                    tvStatus.setText(getString(R.string.status_failed, e.getMessage()));
+>>>>>>> Stashed changes
                 }
             });
         });

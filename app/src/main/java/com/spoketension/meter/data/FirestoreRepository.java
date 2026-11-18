@@ -10,7 +10,8 @@ import java.util.Map;
 public class FirestoreRepository {
 
     public interface Callback {
-        void onSuccess(String message);
+        /** @param documentId ID of the test document; @param message value read back from it */
+        void onSuccess(String documentId, String message);
         void onError(Exception e);
     }
 
@@ -28,8 +29,7 @@ public class FirestoreRepository {
                 .add(data)
                 .addOnSuccessListener(ref -> ref.get()
                         .addOnSuccessListener(snap -> callback.onSuccess(
-                                "連線成功！\n寫入並讀回文件：" + ref.getId()
-                                        + "\nmessage = " + snap.getString("message")))
+                                ref.getId(), snap.getString("message")))
                         .addOnFailureListener(callback::onError))
                 .addOnFailureListener(callback::onError);
     }
