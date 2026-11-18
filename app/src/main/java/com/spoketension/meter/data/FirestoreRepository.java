@@ -6,7 +6,7 @@ import com.google.firebase.firestore.FirebaseFirestore;
 import java.util.HashMap;
 import java.util.Map;
 
-/** 集中管理所有 Firestore 存取。之後的輪組 / 輻條讀數也會放在這裡。 */
+/** Central place for all Firestore access. Wheel and spoke reading data will be added here later. */
 public class FirestoreRepository {
 
     public interface Callback {
@@ -18,7 +18,7 @@ public class FirestoreRepository {
 
     private final FirebaseFirestore db = FirebaseFirestore.getInstance();
 
-    /** 寫入一筆測試文件再讀回來，確認讀寫都正常。 */
+    /** Writes a test document and reads it back to verify both read and write access. */
     public void testConnection(final Callback callback) {
         Map<String, Object> data = new HashMap<>();
         data.put("message", "hello from Spoke Tension app");

@@ -8,5 +8,5 @@
 /captures/
 .externalNativeBuild/
 .cxx/
-# Firebase 設定檔：各自從 Firebase Console 下載，放到 app/ 底下
+# Firebase config: download your own copy from the Firebase Console and place it in app/
 app/google-services.json

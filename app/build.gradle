@@ -8,7 +8,7 @@ android {
     compileSdk 34
 
     defaultConfig {
-        // 必須和 Firebase Console 註冊的 Android 套件名稱一致
+        // Must match the Android package name registered in the Firebase Console
         applicationId 'com.spoketension.meter'
         minSdk 24
         targetSdk 34
@@ -33,7 +33,7 @@ dependencies {
     implementation 'com.google.android.material:material:1.12.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
 
-    // Firebase (BoM 統一管理版本)
+    // Firebase (versions managed by the BoM)
     implementation platform('com.google.firebase:firebase-bom:33.1.2')
     implementation 'com.google.firebase:firebase-firestore'
 }
