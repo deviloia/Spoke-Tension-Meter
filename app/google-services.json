@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "875538834516",
+    "project_id": "spoke-tension-meter",
+    "storage_bucket": "spoke-tension-meter.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:875538834516:android:d2607cc3439631472ab9c1",
+        "android_client_info": {
+          "package_name": "com.spoketension.meter"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAQNYcPtNvJI4dYX-HcSR13EE-mf-zr18U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
