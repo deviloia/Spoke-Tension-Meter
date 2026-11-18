@@ -1,0 +1,12 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/app/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+# Firebase 設定檔：各自從 Firebase Console 下載，放到 app/ 底下
+app/google-services.json
