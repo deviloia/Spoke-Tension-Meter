@@ -40,9 +40,10 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * Measures one side of a wheel, spoke by spoke, with the microphone listening the whole time.
  * Each pluck: Sally + MatrixPencil (FFT is stored for comparison only).
- *  red    = nothing found, or Sally and MP disagree -> pluck the same spoke again
- *  green  = saved, shown for 1.5 s, then the next unmeasured spoke
- *  orange = saved but above the rim limit (likely a mis-read), shown 3 s, then the next spoke;
+ *  grey   = no clean spoke tone heard -> keep listening for the same spoke
+ *  red    = a tone was heard but Sally and MP disagree (or MP found nothing) -> pluck again
+ *  green  = saved, shown for 1 s, then the next unmeasured spoke
+ *  orange = saved but above the rim limit (likely a mis-read), shown 1 s, then the next spoke;
  *           the user goes back with ◀ to measure it again
  * Every pluck shows Sally, MP and FFT values so a rejection can be judged.
  */
@@ -56,7 +57,7 @@ public class MeasureActivity extends AppCompatActivity {
     private static final String STATE_SPOKE = "spokeNo";
     private static final int REQUEST_MIC = 101;
     private static final int FS = SignalAnalyzer.SAMPLE_RATE;
-    private static final long GREEN_MS = 1500;
+    private static final long RESULT_MS = 1000;
 
     /** Panel backgrounds: faded versions of the status palette in ReadingFormat. */
     private static final int GREEN = faded(SafetyJudge.Status.OK), ORANGE = faded(SafetyJudge.Status.LOOSE),
@@ -273,10 +274,10 @@ public class MeasureActivity extends AppCompatActivity {
         return listening && gen == generation;
     }
 
-    /** Sally found nothing: show why, the same target keeps listening. */
+    /** Sally heard no spoke tone: neutral (not an error), the same target keeps listening. */
     private void noPluck(int gen, Target t, String why) {
         if (destroyed || !live(gen) || target.get() != t) return;
-        show(RED, getString(R.string.measure_again), why);
+        show(NEUTRAL, getString(R.string.no_pluck), why);
     }
 
     /** Red: show why and listen for the same spoke again. */
@@ -299,14 +300,19 @@ public class MeasureActivity extends AppCompatActivity {
         if (destroyed || t.spokeNo != spokeNo) return;   // kept even if Stop was tapped meanwhile
         double sally = report.finalHz;
         String values = methods(sally, mp, fft);
-        if (!usable(report)) {
+        // Sally's FFT and YIN disagree, but MatrixPencil confirms the FFT value -> two methods agree, accept.
+        // (On DISAGREE Sally's finalHz is its multi-frame FFT value.)
+        boolean mpBacksFft = report.verdict == PitchDetector.Verdict.DISAGREE
+                && !Double.isNaN(SafetyJudge.combineHz(sally, mp));
+        if (!usable(report) && !mpBacksFft) {
             rejected(gen, t, report.explanation + "\n" + values);
             return;
         }
         double hz = SafetyJudge.combineHz(sally, mp);
         if (Double.isNaN(hz)) {
             rejected(gen, t, (Double.isFinite(mp)
-                    ? getString(R.string.why_disagree, sally, mp, Math.abs(sally - mp), SafetyJudge.AGREE_HZ)
+                    ? getString(R.string.why_disagree, sally, mp, Math.abs(sally - mp),
+                            SafetyJudge.spread(sally, mp) * 100, SafetyJudge.AGREE_RATIO * 100)
                     : getString(R.string.why_no_mp, sally)) + "\n" + values);
             return;
         }
@@ -349,7 +355,7 @@ public class MeasureActivity extends AppCompatActivity {
                     + (over ? "\n" + getString(R.string.why_over_limit, r.tensionKgf, wheel.rimMaxKgf) : "");
             show(over ? ORANGE : GREEN,
                     String.format(Locale.US, "%.1f kgf\n%.1f Hz", r.tensionKgf, r.freqMedianHz), small);
-            main.postDelayed(nextSpoke, over ? 2 * GREEN_MS : GREEN_MS);
+            main.postDelayed(nextSpoke, RESULT_MS);
         }, e -> saveFailed(r, e));
     }
 

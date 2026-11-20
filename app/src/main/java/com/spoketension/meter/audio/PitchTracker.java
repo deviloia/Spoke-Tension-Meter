@@ -36,7 +36,11 @@ public final class PitchTracker {
 
     /** At each step, the peak may move at most 1.5% from the previous frame. */
     public static final double TRACK_TOLERANCE = 0.015;
-    /** (1) Maximum frequency variation (standard deviation / mean): 0.5%. */
+    /**
+     * (1) Maximum frequency variation (standard deviation / mean): 0.5%.
+     * Main speech/hum filter; MatrixPencil would agree with a steady hum, so do not loosen without data
+     * (a rejected pluck now reports "pitch drifts x%" when this rule is the cause).
+     */
     public static final double MAX_FREQ_VARIATION = 0.005;
     /**
      * (2a) Amplitude must decay: the slope (dB/second) must be below this value.
@@ -117,7 +121,12 @@ public final class PitchTracker {
             if (c.accepted && (best == null || c.meanMagnitude > best.meanMagnitude)) best = c;
         }
         if (best == null) {
-            result.message = "no stable, decaying tone found (speech or noise?)";
+            Candidate loudest = null;
+            for (Candidate c : result.candidates)
+                if (loudest == null || c.meanMagnitude > loudest.meanMagnitude) loudest = c;
+            result.message = loudest == null ? "no tone in the spoke's frequency band"
+                    : String.format(java.util.Locale.US, "no stable tone (strongest %.0f Hz: %s)",
+                    loudest.frequencyHz, loudest.rejectReason);
             return result;
         }
 

@@ -22,10 +22,16 @@ public final class TapDetector {
 
     /** Each volume-measuring frame is 256 samples long (about 5.8 ms at 44.1 kHz). */
     public static final int HOP = 256;
-    /** Compare the current frame with the 4 frames before it (about 23 ms). */
+    /**
+     * Compare the current frame with 4 earlier frames (about 23 ms), skipping the frame right
+     * before it, which may already hold the start of an attack split across two frames.
+     */
     public static final int LOOKBACK_FRAMES = 4;
-    /** Volume must rise at least 4x (about +12 dB) to count as a pluck. */
-    public static final double MIN_JUMP_RATIO = 4.0;
+    /**
+     * Volume must rise at least 3x (about +9.5 dB) to count as a pluck.
+     * ponytail: was 4x; tune with real recordings if quiet plucks are still missed.
+     */
+    public static final double MIN_JUMP_RATIO = 3.0;
     /**
      * ABSOLUTE minimum volume of a pluck (RMS, 0..1 scale).
      * Version 0.2 used a fixed 0.003: with the UNPROCESSED audio source (no gain),
@@ -69,16 +75,18 @@ public final class TapDetector {
         // Volume threshold: the larger of the absolute level and the level relative to the background
         double minRms = Math.max(MIN_RMS, NOISE_FACTOR * median(rms));
 
-        // Step 2: compare each frame with the loudest of the 4 frames before it
+        // Step 2: compare each frame with the loudest of frames f-5..f-2 (f-1 skipped, see LOOKBACK_FRAMES)
         List<Tap> all = new ArrayList<>();
         int skip = (int) (SKIP_SECONDS * sampleRate);
-        for (int f = LOOKBACK_FRAMES; f < frames; f++) {
+        for (int f = LOOKBACK_FRAMES + 1; f < frames; f++) {
             if (rms[f] < minRms) continue;
             double before = 0;
-            for (int b = f - LOOKBACK_FRAMES; b < f; b++) before = Math.max(before, rms[b]);
+            // Skip frame f-1: it may already hold the start of an attack split across two frames.
+            for (int b = f - LOOKBACK_FRAMES - 1; b < f - 1; b++) before = Math.max(before, rms[b]);
             double ratio = rms[f] / (before + 1e-4);   // 1e-4: avoid dividing by 0 in a very quiet room
             if (ratio >= MIN_JUMP_RATIO) {
-                int onset = f * HOP;
+                // The attack may have started in the skipped frame f-1; the 40 ms skip covers the extra frame.
+                int onset = (f - 1) * HOP;
                 all.add(new Tap(onset, onset + skip, ratio));
             }
         }

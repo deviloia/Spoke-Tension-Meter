@@ -155,7 +155,8 @@ public final class PitchDetector {
                 r.finalHz = fftHz;
                 r.verdict = Verdict.DISAGREE;
                 r.explanation = String.format(java.util.Locale.US,
-                        "FFT and YIN disagree (%.1f%%). Measure this spoke again.", diff * 100);
+                        "Multi-frame FFT %.1f Hz and YIN %.1f Hz disagree (%.1f%% apart, max %.0f%%).",
+                        fftHz, yinHz, diff * 100, AGREE_TOLERANCE * 100);
             }
         }
 

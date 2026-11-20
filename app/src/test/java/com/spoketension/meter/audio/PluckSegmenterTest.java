@@ -126,6 +126,23 @@ public class PluckSegmenterTest {
         }
     }
 
+    /** A soft finger pluck whose 12 ms attack straddles two 256-sample frames, over louder room noise. */
+    @Test public void slowAttackSplitAcrossTwoFramesIsStillDetected() {
+        double[] x = new double[SR * 2];
+        // Attack starts 200 samples before a frame boundary: that frame rises only ~2x (below the
+        // 3x jump), but it used to mask the next frame's real jump because it sat in the lookback.
+        int onset = 256 * 40 + 56;
+        for (int i = onset; i < x.length; i++) {
+            double t = (i - onset) / (double) SR;
+            x[i] += 0.05 * Math.min(1, t / 0.012) * Math.exp(-t / 0.3) * Math.sin(2 * Math.PI * 420 * t);
+        }
+        Random random = new Random(7);
+        for (int i = 0; i < x.length; i++) x[i] += 0.0025 * random.nextGaussian();
+        List<PluckSegmenter.Segment> segments = feed(new PluckSegmenter(SR), x, 0, x.length, 1024);
+        assertEquals(1, segments.size());
+        assertUsable(420, segments.get(0));
+    }
+
     private static void noise(double[] x) {
         Random random = new Random(42);
         for (int i = 0; i < x.length; i++) x[i] += 0.00003 * random.nextGaussian();

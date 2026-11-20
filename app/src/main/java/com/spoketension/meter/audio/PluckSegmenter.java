@@ -83,9 +83,10 @@ public final class PluckSegmenter {
                 pending = null;
                 pendingSize = 0;
             }
-        } else if (historySize >= TapDetector.LOOKBACK_FRAMES) {
+        } else if (historySize > TapDetector.LOOKBACK_FRAMES) {
             double before = 0;
-            for (int i = 1; i <= TapDetector.LOOKBACK_FRAMES; i++)
+            // i = 2..: skip the previous frame, which may already hold the start of this attack.
+            for (int i = 2; i <= TapDetector.LOOKBACK_FRAMES + 1; i++)
                 before = Math.max(before, history[(historyNext - i + HISTORY_FRAMES) % HISTORY_FRAMES]);
             double[] levels = Arrays.copyOf(history, historySize);
             Arrays.sort(levels);

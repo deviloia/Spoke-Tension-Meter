@@ -32,7 +32,8 @@ public class CalcTest {
     @Test
     public void sallyAndMatrixPencilMustAgree() {
         assertEquals(348, SafetyJudge.combineHz(346, 350), 1e-9);
-        assertEquals(Double.NaN, SafetyJudge.combineHz(346, 352), 0);
+        assertEquals(351, SafetyJudge.combineHz(346, 356), 1e-9);          // 2.8 % apart: ok
+        assertEquals(Double.NaN, SafetyJudge.combineHz(346, 360), 0);     // 4 % apart: rejected
         assertEquals(Double.NaN, SafetyJudge.combineHz(346, Double.NaN), 0);
     }
 }
