@@ -56,4 +56,25 @@ public final class SignalAnalyzer {
         }
         return out;
     }
+
+    /** One analysis window after an onset that was already detected (auto mode). Empty if too short. */
+    public static List<Window> windowAt(double[] x, int fs, int onset) {
+        List<Window> out = new ArrayList<>();
+        int n = ANALYSIS_SAMPLES;
+        int start = Math.min(onset + (int) (TapDetector.SKIP_SECONDS * fs), x.length - n);
+        if (start < onset) return out;
+        double[] s = new double[n];
+        System.arraycopy(x, start, s, 0, n);
+        out.add(new Window(s, start, onset, Double.NaN));
+        return out;
+    }
+
+    /** {FFT Hz, MatrixPencil Hz} for the same windows; NaN where a method finds nothing. */
+    public static double[] fftAndMatrixPencil(List<Window> windows, int fs, double lo, double hi) {
+        Window w0 = windows.isEmpty() ? null : windows.get(0);
+        FftPitch.Peak fft = w0 == null ? null
+                : FftPitch.dominantPeak(w0.samples, 0, w0.samples.length, fs, lo, hi);
+        double mp = windows.isEmpty() ? Double.NaN : MatrixPencil.measure(windows, fs, lo, hi).freqHz;
+        return new double[]{fft == null ? Double.NaN : fft.frequencyHz, mp};
+    }
 }

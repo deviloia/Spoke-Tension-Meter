@@ -1,6 +1,5 @@
 package com.spoketension.meter.ui;
 
-import android.graphics.Color;
 import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
@@ -30,6 +29,7 @@ public class ResultActivity extends AppCompatActivity {
     private final FirestoreRepository repository = new FirestoreRepository();
     private TextView tvStatus;
     private ArrayAdapter<Reading> adapter;
+    private Wheel wheel;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -42,9 +42,9 @@ public class ResultActivity extends AppCompatActivity {
             public View getView(int position, View convertView, @NonNull ViewGroup parent) {
                 TextView tv = (TextView) super.getView(position, convertView, parent);
                 Reading r = getItem(position);
-                tv.setText(String.format(Locale.US, "#%-3d %s  %6.1f Hz  %+6.1f %%  %6.1f kgf  %s",
-                        r.spokeNo, r.side, r.freqMedianHz, r.relativePercent, r.tensionKgf, r.status));
-                tv.setBackgroundColor(color(r.status));
+                tv.setText(ReadingFormat.rowText(ResultActivity.this, wheel, r)
+                        + String.format(Locale.US, "%nvs side average: %+.1f %%", r.relativePercent));
+                tv.setBackgroundColor(ReadingFormat.color(r.status));
                 return tv;
             }
         };
@@ -53,7 +53,8 @@ public class ResultActivity extends AppCompatActivity {
         String wheelId = getIntent().getStringExtra(MeasureActivity.EXTRA_WHEEL_ID);
         String sessionId = getIntent().getStringExtra(EXTRA_SESSION_ID);
         tvStatus.setText(R.string.loading);
-        repository.loadWheel(wheelId, wheel -> repository.loadReadings(wheelId, sessionId, readings -> {
+        repository.loadWheel(wheelId, w -> repository.loadReadings(wheelId, sessionId, readings -> {
+            wheel = w;
             judgeAll(readings, wheel);
             adapter.clear();
             adapter.addAll(readings);
@@ -86,10 +87,4 @@ public class ResultActivity extends AppCompatActivity {
         }
     }
 
-    private static int color(String status) {
-        if ("danger".equals(status)) return Color.rgb(255, 205, 210);
-        if ("loose".equals(status)) return Color.rgb(255, 224, 178);
-        if ("uneven".equals(status)) return Color.rgb(255, 249, 196);
-        return Color.TRANSPARENT;
-    }
 }

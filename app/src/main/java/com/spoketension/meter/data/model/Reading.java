@@ -6,7 +6,9 @@ import java.util.List;
 public class Reading {
     public int spokeNo;
     public String side;            // "L" or "R"
-    public List<Double> freqHz;    // raw frequencies (up to three plucks)
+    public List<Double> freqHz;    // raw frequencies (up to three plucks), Sally method
+    public List<Double> fftHz;     // same plucks, single-window FFT (NaN = not found)
+    public List<Double> mpHz;      // same plucks, MatrixPencil (NaN = not found)
     public double freqMedianHz;
     public double relativePercent; // method 1: e.g. -11.1
     public double tensionKgf;      // method 2
