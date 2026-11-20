@@ -31,9 +31,68 @@ public final class AudioCapture {
         }
     }
 
-    /** Records synchronously (blocks the thread). Call from a background thread, NOT the UI thread. */
-    @SuppressLint("MissingPermission")   // LabActivity checks the permission before calling
-    public static Recording record(Context context, int sampleRate, double seconds) {
+    /**
+     * A running microphone stream. Read and close it on the capture thread. stop() may be called
+     * from the UI thread to interrupt a blocking read; read() then returns -1. The read itself never
+     * holds the state lock, so Stop does not have to wait for another audio block to arrive.
+     */
+    public static final class Stream implements AutoCloseable {
+        public final String sourceName;
+        private final AudioRecord recorder;
+        private final Object stateLock = new Object();
+        private volatile boolean stopped;
+        private boolean released;
+
+        private Stream(AudioRecord recorder, String sourceName) {
+            this.recorder = recorder;
+            this.sourceName = sourceName;
+        }
+
+        public int read(short[] buffer) {
+            return read(buffer, 0, buffer.length);
+        }
+
+        public int read(short[] buffer, int offset, int count) {
+            if (stopped) return -1;
+            try {
+                int read = recorder.read(buffer, offset, count, AudioRecord.READ_BLOCKING);
+                if (stopped) return -1;
+                if (read <= 0) throw new IllegalStateException("Audio read error: " + read);
+                return read;
+            } catch (IllegalStateException e) {
+                if (stopped) return -1;
+                throw e;
+            }
+        }
+
+        public void stop() {
+            synchronized (stateLock) {
+                if (stopped) return;
+                stopped = true;
+                if (!released) {
+                    try {
+                        recorder.stop();
+                    } catch (IllegalStateException ignored) {
+                        // Already stopped by the platform (e.g. microphone access revoked).
+                    }
+                }
+            }
+        }
+
+        @Override public void close() {
+            stop();
+            synchronized (stateLock) {
+                if (!released) {
+                    released = true;
+                    recorder.release();
+                }
+            }
+        }
+    }
+
+    /** Opens and starts recording. Caller must check RECORD_AUDIO permission before calling. */
+    @SuppressLint("MissingPermission")
+    public static Stream openStream(Context context, int sampleRate) {
         int minBytes = AudioRecord.getMinBufferSize(sampleRate,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
         if (minBytes <= 0) throw new IllegalStateException(sampleRate + " Hz recording unsupported");
@@ -49,35 +108,38 @@ public final class AudioCapture {
                 context.getSystemService(Context.AUDIO_SERVICE))
                 .getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED));
 
-        AudioRecord recorder = null;
-        String used = null;
+        RuntimeException lastFailure = null;
         for (int i = 0; i < sources.length; i++) {
             if (i == 0 && !unprocessedSupported) continue;
-            AudioRecord candidate = new AudioRecord(sources[i], sampleRate,
-                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferBytes);
-            if (candidate.getState() == AudioRecord.STATE_INITIALIZED) {
-                recorder = candidate;
-                used = names[i];
-                break;
+            AudioRecord candidate = null;
+            try {
+                candidate = new AudioRecord(sources[i], sampleRate,
+                        AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferBytes);
+                if (candidate.getState() != AudioRecord.STATE_INITIALIZED)
+                    throw new IllegalStateException("Cannot initialize microphone source " + names[i]);
+                candidate.startRecording();
+                if (candidate.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
+                    throw new IllegalStateException("Cannot start microphone source " + names[i]);
+                return new Stream(candidate, names[i]);
+            } catch (RuntimeException e) {
+                lastFailure = e;
+                if (candidate != null) candidate.release();
             }
-            candidate.release();
         }
-        if (recorder == null) throw new IllegalStateException("Cannot initialize microphone");
+        throw new IllegalStateException("Cannot initialize microphone", lastFailure);
+    }
 
+    /** Records synchronously (blocks the thread). Call from a background thread, NOT the UI thread. */
+    public static Recording record(Context context, int sampleRate, double seconds) {
         short[] pcm = new short[(int) (sampleRate * seconds)];
-        try {
-            recorder.startRecording();
+        try (Stream stream = openStream(context, sampleRate)) {
             int offset = 0;
             while (offset < pcm.length) {
-                int count = recorder.read(pcm, offset,
-                        Math.min(2048, pcm.length - offset), AudioRecord.READ_BLOCKING);
+                int count = stream.read(pcm, offset, Math.min(2048, pcm.length - offset));
                 if (count <= 0) throw new IllegalStateException("Audio read error: " + count);
                 offset += count;
             }
-            return new Recording(pcm, used);
-        } finally {
-            if (recorder.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) recorder.stop();
-            recorder.release();
+            return new Recording(pcm, stream.sourceName);
         }
     }
 

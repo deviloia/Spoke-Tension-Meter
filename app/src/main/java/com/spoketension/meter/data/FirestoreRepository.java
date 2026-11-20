@@ -3,6 +3,7 @@ package com.spoketension.meter.data;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.firebase.firestore.CollectionReference;
+import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.Query;
 import com.spoketension.meter.data.model.Reading;
@@ -48,6 +49,18 @@ public class FirestoreRepository {
                            OnSuccessListener<String> onDone, OnFailureListener onError) {
         wheels().document(wheelId).collection("sessions").add(session)
                 .addOnSuccessListener(ref -> onDone.onSuccess(ref.getId()))
+                .addOnFailureListener(onError);
+    }
+
+    /** A stable session id lets interrupted/retried saves reuse the same document. */
+    public void saveSession(String wheelId, String sessionId, Session session,
+                            OnSuccessListener<Void> onDone, OnFailureListener onError) {
+        DocumentReference ref = wheels().document(wheelId).collection("sessions").document(sessionId);
+        db.<Void>runTransaction(transaction -> {
+            if (!transaction.get(ref).exists()) transaction.set(ref, session);
+            return null;
+        })
+                .addOnSuccessListener(onDone)
                 .addOnFailureListener(onError);
     }
 

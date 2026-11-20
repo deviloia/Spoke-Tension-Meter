@@ -2,6 +2,7 @@ package com.spoketension.meter.audio;
 
 import com.spoketension.meter.calc.SoundTensionCalculator;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -67,6 +68,29 @@ public final class PitchDetector {
     }
 
     public static Report analyze(double[] x, int sampleRate, Params p) {
+        return analyzeTaps(x, sampleRate, p,
+                TapDetector.findCandidates(x, sampleRate, MAX_TAP_CANDIDATES));
+    }
+
+    /**
+     * Analyzes an onset already detected in a continuous stream. Re-running the whole-clip tap
+     * detector on a short, mostly-ringing segment would give the wrong noise floor or pick an older
+     * pluck in the pre-roll. The FFT/YIN acceptance rules remain identical to analyze().
+     */
+    public static Report analyzeAtOnset(double[] x, int sampleRate, Params p, int onsetSample) {
+        if (x == null || sampleRate <= 0 || onsetSample < 0 || onsetSample >= x.length)
+            throw new IllegalArgumentException("Invalid pluck onset");
+        int start = onsetSample + (int) (TapDetector.SKIP_SECONDS * sampleRate);
+        if (start >= x.length) {
+            Report r = new Report();
+            r.explanation = "Audio after the tap is too short.";
+            return r;
+        }
+        return analyzeTaps(x, sampleRate, p,
+                Collections.singletonList(new TapDetector.Tap(onsetSample, start, Double.NaN)));
+    }
+
+    private static Report analyzeTaps(double[] x, int sampleRate, Params p, List<TapDetector.Tap> taps) {
         Report r = new Report();
 
         // (0) Frequency band matching 30-200 kgf for the spoke being measured
@@ -76,7 +100,6 @@ public final class PitchDetector {
                 SoundTensionCalculator.MAX_TENSION_KGF, p.lengthCm, p.diameterMm, p.densityKgM3);
 
         // (1) Candidate plucks
-        List<TapDetector.Tap> taps = TapDetector.findCandidates(x, sampleRate, MAX_TAP_CANDIDATES);
         if (taps.isEmpty()) {
             r.explanation = "No sharp tap detected. Pluck firmly, closer to the phone.";
             return r;

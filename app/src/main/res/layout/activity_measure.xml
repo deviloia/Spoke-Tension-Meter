@@ -64,6 +64,21 @@
         </RadioGroup>
 
         <Button
+            android:id="@+id/btnAutoMeasure"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/auto_start" />
+
+        <TextView
+            android:id="@+id/tvAutoStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:accessibilityLiveRegion="polite"
+            android:paddingVertical="8dp"
+            android:text="@string/auto_hint" />
+
+        <Button
             android:id="@+id/btnListen"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
