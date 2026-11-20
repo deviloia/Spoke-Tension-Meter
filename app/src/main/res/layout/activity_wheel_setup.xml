@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <EditText
+            android:id="@+id/etName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/wheel_name"
+            android:inputType="text" />
+
+        <EditText
+            android:id="@+id/etSpokes"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/spoke_count"
+            android:inputType="number"
+            android:text="32" />
+
+        <RadioGroup
+            android:id="@+id/rgPosition"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:checkedButton="@+id/rbFront"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/rbFront"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/front" />
+
+            <RadioButton
+                android:id="@+id/rbRear"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/rear" />
+        </RadioGroup>
+
+        <EditText
+            android:id="@+id/etLengthLeft"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/length_left"
+            android:inputType="numberDecimal" />
+
+        <EditText
+            android:id="@+id/etLengthRight"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/length_right"
+            android:inputType="numberDecimal" />
+
+        <EditText
+            android:id="@+id/etDiameter"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/diameter"
+            android:inputType="numberDecimal"
+            android:text="2.0" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/material" />
+
+        <Spinner
+            android:id="@+id/spMaterial"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <EditText
+            android:id="@+id/etRimMax"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/rim_max"
+            android:inputType="numberDecimal"
+            android:text="120" />
+
+        <Button
+            android:id="@+id/btnSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/save" />
+    </LinearLayout>
+</ScrollView>

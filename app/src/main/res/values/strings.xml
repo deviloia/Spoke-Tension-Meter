@@ -1,8 +1,47 @@
 <resources>
     <string name="app_name">Spoke Tension</string>
-    <string name="btn_test_firestore">Test Firestore Connection</string>
-    <string name="status_idle">Not tested yet</string>
-    <string name="status_connecting">Connecting…</string>
-    <string name="status_success">Connected!\nWrote and read back document: %1$s\nmessage = %2$s</string>
-    <string name="status_failed">Connection failed: %1$s</string>
+
+    <string name="loading">Loading…</string>
+    <string name="load_failed">Load failed: %1$s</string>
+    <string name="save_failed">Save failed: %1$s</string>
+    <string name="saved">Saved</string>
+    <string name="save">Save</string>
+
+    <!-- WheelList -->
+    <string name="add_wheel">+ New wheel</string>
+    <string name="no_wheels">No wheels yet. Tap “+ New wheel”.</string>
+    <string name="wheel_row">%1$s · %2$s · %3$d spokes · %4$s</string>
+    <string name="algorithm_lab">Algorithm lab (FFT / MatrixPencil / YIN)</string>
+
+    <!-- WheelSetup -->
+    <string name="wheel_name">Wheel name</string>
+    <string name="spoke_count">Number of spokes</string>
+    <string name="front">Front</string>
+    <string name="rear">Rear</string>
+    <string name="length_left">Left spoke length (mm)</string>
+    <string name="length_right">Right spoke length (mm)</string>
+    <string name="diameter">Spoke diameter (mm)</string>
+    <string name="material">Material</string>
+    <string name="rim_max">Rim max tension (kgf)</string>
+    <string name="invalid_input">Fill in every field with a positive value.</string>
+
+    <!-- Measure -->
+    <string name="session_label">Session label (e.g. before / after)</string>
+    <string name="prev">◀</string>
+    <string name="next">▶</string>
+    <string name="left">Left</string>
+    <string name="right">Right</string>
+    <string name="spoke_n_of">Spoke %1$d / %2$d</string>
+    <string name="listen">Listen (2 s)</string>
+    <string name="listening">Listening… pluck the spoke now</string>
+    <string name="pluck_hint">Tap Listen and pluck the spoke. Up to 3 plucks; the median is saved.</string>
+    <string name="measure_result">Plucks: %1$s Hz (%2$d/%3$d)\nMedian %4$.1f Hz → %5$.1f kgf\nStatus: %6$s</string>
+    <string name="save_next">Save &amp; next spoke</string>
+    <string name="results">Whole-wheel results</string>
+    <string name="nothing_saved">Save at least one spoke first.</string>
+    <string name="record_failed">Recording failed: %1$s</string>
+    <string name="mic_required">Microphone permission is required.</string>
+
+    <!-- Result -->
+    <string name="result_summary">%1$d / %2$d spokes measured</string>
 </resources>

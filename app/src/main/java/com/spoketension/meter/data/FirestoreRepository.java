@@ -1,36 +1,69 @@
 package com.spoketension.meter.data;
 
-import com.google.firebase.firestore.FieldValue;
+import com.google.android.gms.tasks.OnFailureListener;
+import com.google.android.gms.tasks.OnSuccessListener;
+import com.google.firebase.firestore.CollectionReference;
 import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.Query;
+import com.spoketension.meter.data.model.Reading;
+import com.spoketension.meter.data.model.Session;
+import com.spoketension.meter.data.model.Wheel;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.List;
 
-/** Central place for all Firestore access. Wheel and spoke reading data will be added here later. */
+/** All Firestore access lives here; screens never touch Firestore directly. */
 public class FirestoreRepository {
-
-    public interface Callback {
-        /** @param documentId ID of the test document; @param message value read back from it */
-        void onSuccess(String documentId, String message);
-        void onError(Exception e);
-    }
-
-    private static final String COLLECTION_TEST = "connection_test";
 
     private final FirebaseFirestore db = FirebaseFirestore.getInstance();
 
-    /** Writes a test document and reads it back to verify both read and write access. */
-    public void testConnection(final Callback callback) {
-        Map<String, Object> data = new HashMap<>();
-        data.put("message", "hello from Spoke Tension app");
-        data.put("createdAt", FieldValue.serverTimestamp());
+    private CollectionReference wheels() {
+        return db.collection("wheels");
+    }
 
-        db.collection(COLLECTION_TEST)
-                .add(data)
-                .addOnSuccessListener(ref -> ref.get()
-                        .addOnSuccessListener(snap -> callback.onSuccess(
-                                ref.getId(), snap.getString("message")))
-                        .addOnFailureListener(callback::onError))
-                .addOnFailureListener(callback::onError);
+    private CollectionReference readings(String wheelId, String sessionId) {
+        return wheels().document(wheelId).collection("sessions").document(sessionId).collection("readings");
+    }
+
+    public void loadWheels(OnSuccessListener<List<Wheel>> onDone, OnFailureListener onError) {
+        wheels().orderBy("createdAt", Query.Direction.DESCENDING).get()
+                .addOnSuccessListener(snap -> onDone.onSuccess(snap.toObjects(Wheel.class)))
+                .addOnFailureListener(onError);
+    }
+
+    public void loadWheel(String wheelId, OnSuccessListener<Wheel> onDone, OnFailureListener onError) {
+        wheels().document(wheelId).get()
+                .addOnSuccessListener(snap -> onDone.onSuccess(snap.toObject(Wheel.class)))
+                .addOnFailureListener(onError);
+    }
+
+    /** Create a wheel -> returns its generated id. */
+    public void addWheel(Wheel wheel, OnSuccessListener<String> onDone, OnFailureListener onError) {
+        wheels().add(wheel)
+                .addOnSuccessListener(ref -> onDone.onSuccess(ref.getId()))
+                .addOnFailureListener(onError);
+    }
+
+    /** Start a measurement session under a wheel -> returns its generated id. */
+    public void addSession(String wheelId, Session session,
+                           OnSuccessListener<String> onDone, OnFailureListener onError) {
+        wheels().document(wheelId).collection("sessions").add(session)
+                .addOnSuccessListener(ref -> onDone.onSuccess(ref.getId()))
+                .addOnFailureListener(onError);
+    }
+
+    /** Save one spoke; the spoke number is the document id, so re-measuring overwrites it. */
+    public void saveReading(String wheelId, String sessionId, Reading reading,
+                            OnSuccessListener<Void> onDone, OnFailureListener onError) {
+        readings(wheelId, sessionId).document(String.valueOf(reading.spokeNo)).set(reading)
+                .addOnSuccessListener(onDone)
+                .addOnFailureListener(onError);
+    }
+
+    /** All readings of a session, ordered by spoke number. */
+    public void loadReadings(String wheelId, String sessionId,
+                             OnSuccessListener<List<Reading>> onDone, OnFailureListener onError) {
+        readings(wheelId, sessionId).orderBy("spokeNo").get()
+                .addOnSuccessListener(snap -> onDone.onSuccess(snap.toObjects(Reading.class)))
+                .addOnFailureListener(onError);
     }
 }
