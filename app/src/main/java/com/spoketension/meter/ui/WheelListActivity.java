@@ -15,7 +15,7 @@ import com.spoketension.meter.data.model.Wheel;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Home: lists all wheels from Firestore; "+" adds one, tapping one starts measuring. */
+/** Home: lists all wheels from Firestore; "+" adds one, tapping one opens its results / measuring hub. */
 public class WheelListActivity extends AppCompatActivity {
 
     private final FirestoreRepository repository = new FirestoreRepository();
@@ -32,7 +32,7 @@ public class WheelListActivity extends AppCompatActivity {
         adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, new ArrayList<>());
         list.setAdapter(adapter);
         list.setOnItemClickListener((parent, view, position, id) ->
-                startActivity(new Intent(this, MeasureActivity.class)
+                startActivity(new Intent(this, ResultActivity.class)
                         .putExtra(MeasureActivity.EXTRA_WHEEL_ID, wheels.get(position).id)));
         findViewById(R.id.btnAddWheel).setOnClickListener(v ->
                 startActivity(new Intent(this, WheelSetupActivity.class)));

@@ -15,11 +15,22 @@ public class Wheel {
     public double diameterMm;
     public String material;           // Material enum name, e.g. "STAINLESS"
     public double rimMaxKgf;
+    public double expectLeftKgf;      // target tension per side (0 on wheels made before this field)
+    public double expectRightKgf;
     @ServerTimestamp public Timestamp createdAt;
 
     public Wheel() { }                // required by Firestore
 
     public double lengthMm(String side) {
         return "R".equals(side) ? lengthRightMm : lengthLeftMm;
+    }
+
+    public double expectKgf(String side) {
+        return "R".equals(side) ? expectRightKgf : expectLeftKgf;
+    }
+
+    /** Spokes on one side; numbering restarts at 1 on each side. */
+    public int spokesPerSide() {
+        return spokeCount / 2;
     }
 }

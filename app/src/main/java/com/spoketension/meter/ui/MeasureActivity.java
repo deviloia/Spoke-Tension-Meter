@@ -1,22 +1,20 @@
 package com.spoketension.meter.ui;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.graphics.Typeface;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.graphics.ColorUtils;
 
 import com.spoketension.meter.R;
 import com.spoketension.meter.audio.AudioCapture;
@@ -31,53 +29,57 @@ import com.spoketension.meter.data.model.Reading;
 import com.spoketension.meter.data.model.Session;
 import com.spoketension.meter.data.model.Wheel;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Locale;
-import java.util.TreeMap;
-import java.util.UUID;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Manual measurements, or one fresh pluck and an automatic save for each remaining spoke.
- * Every accepted pluck is analysed with all three methods (Sally = PitchDetector, FFT, MatrixPencil)
- * on the same onset; Sally's value drives kgf and status, the other two are stored for comparison.
+ * Measures one side of a wheel, spoke by spoke, with the microphone listening the whole time.
+ * Each pluck: Sally + MatrixPencil (FFT is stored for comparison only).
+ *  red    = nothing found, or Sally and MP disagree -> pluck the same spoke again
+ *  green  = saved, shown for 1.5 s, then the next unmeasured spoke
+ *  orange = saved but above the rim limit (likely a mis-read), shown 3 s, then the next spoke;
+ *           the user goes back with ◀ to measure it again
+ * Every pluck shows Sally, MP and FFT values so a rejection can be judged.
  */
 public class MeasureActivity extends AppCompatActivity {
 
     public static final String EXTRA_WHEEL_ID = "wheelId";
-    private static final int REQUEST_MIC = 101;
-    private static final int PLUCKS = 3;
-    private static final int MANUAL_SECONDS = 2;
-    private static final int FS = SignalAnalyzer.SAMPLE_RATE;
-    /** Indexes into one pluck: {Sally, FFT, MatrixPencil} Hz. */
-    private static final int SALLY = 0, FFT = 1, MP = 2;
-    private static final String STATE_SESSION = "sessionId";
-    private static final String STATE_SESSION_CREATED = "sessionCreated";
-    private static final String STATE_LABEL = "sessionLabel";
+    private static final String EXTRA_SESSION_ID = "sessionId";
+    private static final String EXTRA_SESSION_LABEL = "sessionLabel";
+    private static final String EXTRA_SIDE = "side";
+    private static final String EXTRA_SPOKE = "spokeNo";
     private static final String STATE_SPOKE = "spokeNo";
-    private static final String STATE_ANCHOR_SPOKE = "anchorSpoke";
-    private static final String STATE_ANCHOR_SIDE = "anchorSide";
-    private static final String STATE_RESUME = "resumeSpoke";
-    private static final String STATE_PLUCKS = "plucks";
-    private static final String STATE_COMPLETE = "complete";
-    private static final String STATE_INTERRUPTED = "interrupted";
-    private static final String STATE_SAVING = "saving";
+    private static final int REQUEST_MIC = 101;
+    private static final int FS = SignalAnalyzer.SAMPLE_RATE;
+    private static final long GREEN_MS = 1500;
 
-    private enum PermissionAction { NONE, MANUAL, AUTO }
+    /** Panel backgrounds: faded versions of the status palette in ReadingFormat. */
+    private static final int GREEN = faded(SafetyJudge.Status.OK), ORANGE = faded(SafetyJudge.Status.LOOSE),
+            RED = faded(SafetyJudge.Status.DANGER), NEUTRAL = Color.rgb(238, 238, 238);
 
-    /** Immutable target: a late result can never be assigned to a different spoke/side. */
-    private static final class CaptureTarget {
+    private static int faded(SafetyJudge.Status s) {
+        return ColorUtils.setAlphaComponent(ReadingFormat.color(s), 80);
+    }
+
+    static Intent intent(Context c, String wheelId, String sessionId, String label, String side, int spokeNo) {
+        return new Intent(c, MeasureActivity.class).putExtra(EXTRA_WHEEL_ID, wheelId)
+                .putExtra(EXTRA_SESSION_ID, sessionId).putExtra(EXTRA_SESSION_LABEL, label)
+                .putExtra(EXTRA_SIDE, side).putExtra(EXTRA_SPOKE, spokeNo);
+    }
+
+    /** Immutable target: a late result can never be assigned to a different spoke. */
+    private static final class Target {
         final int spokeNo;
-        final String side;
         final PitchDetector.Params params;
-        final double[] band;   // FFT / MatrixPencil search band, same 30–200 kgf range as Sally
+        final double[] band;   // MatrixPencil search band, same 30–200 kgf range as Sally
 
-        CaptureTarget(int spokeNo, String side, PitchDetector.Params params, double[] band) {
+        Target(int spokeNo, PitchDetector.Params params, double[] band) {
             this.spokeNo = spokeNo;
-            this.side = side;
             this.params = params;
             this.band = band;
         }
@@ -85,356 +87,180 @@ public class MeasureActivity extends AppCompatActivity {
 
     private final FirestoreRepository repository = new FirestoreRepository();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
-    /** FFT + MatrixPencil run here so the capture thread keeps draining the microphone. */
+    /** MatrixPencil runs here so the capture thread keeps draining the microphone. */
     private final ExecutorService analysisExecutor = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
-    /** Accepted plucks for the current spoke, each {Sally, FFT, MatrixPencil} Hz. */
-    private final List<double[]> plucks = new ArrayList<>();
-    /** Spokes saved in this session, by spoke number. */
-    private final TreeMap<Integer, Reading> measured = new TreeMap<>();
-    private final AtomicReference<CaptureTarget> autoTarget = new AtomicReference<>();
+    private final Runnable nextSpoke = this::next;
+    /** Spoke being listened for; null while a pluck is analysed, saved, shown or awaiting a choice. */
+    private final AtomicReference<Target> target = new AtomicReference<>();
+    /** Spoke numbers of this side already saved in the session (UI thread only). */
+    private final Set<Integer> measured = new HashSet<>();
 
-    // These fields are also read by the capture thread. Everything else belongs to the UI thread.
-    private volatile int audioGeneration;
-    private volatile boolean autoRunning;
+    // Also read by the capture thread.
+    private volatile int generation;
+    private volatile boolean listening;
     private volatile AudioCapture.Stream activeStream;
 
-    private String wheelId, sessionId, sessionLabel;
+    private String wheelId, sessionId, sessionLabel, side;
     private Wheel wheel;
-    private int spokeNo = 1;
-    /** The side the user chose for anchorSpoke; neighbours alternate from it. */
-    private int anchorSpoke = 1;
-    private String anchorSide = "L";
-    /** Where "Continue" picks up: the spoke after the last newly measured one. */
-    private int resumeSpoke = 1;
-    private boolean recording, audioTaskActive, saving, sessionCreated, complete;
-    private boolean visible, destroyed, settingSide;
-    private Reading pendingSave;
-    private PermissionAction permissionAction = PermissionAction.NONE;
+    private int spokeNo;
+    private boolean sessionSaved, visible, destroyed;
+    /** Reading whose save failed, waiting for "Retry save". */
+    private Reading pending;
 
-    private EditText etSession;
-    private TextView tvSpoke, tvResult, tvAutoStatus, tvMeasuredHeader;
-    private LinearLayout measuredList;
-    private RadioGroup rgSide;
-    private Button btnListen, btnSave, btnAuto, btnPrev, btnNext, btnResults, btnContinue;
+    private LinearLayout panel;
+    private TextView tvSide, tvSpokeBig, tvOfN, tvBig, tvSmall;
+    private Button btnPrev, btnNext, btnListen, btnRetry, btnRetrySave;
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         setContentView(R.layout.activity_measure);
         wheelId = getIntent().getStringExtra(EXTRA_WHEEL_ID);
-        etSession = findViewById(R.id.etSession);
-        tvSpoke = findViewById(R.id.tvSpoke);
-        tvResult = findViewById(R.id.tvResult);
-        tvAutoStatus = findViewById(R.id.tvAutoStatus);
-        tvMeasuredHeader = findViewById(R.id.tvMeasuredHeader);
-        measuredList = findViewById(R.id.measuredList);
-        rgSide = findViewById(R.id.rgSide);
-        // This subtree is restored explicitly below, together with its captured frequencies.
-        rgSide.setSaveFromParentEnabled(false);
-        btnListen = findViewById(R.id.btnListen);
-        btnSave = findViewById(R.id.btnSave);
-        btnAuto = findViewById(R.id.btnAutoMeasure);
+        sessionId = getIntent().getStringExtra(EXTRA_SESSION_ID);
+        sessionLabel = getIntent().getStringExtra(EXTRA_SESSION_LABEL);
+        side = getIntent().getStringExtra(EXTRA_SIDE);
+        spokeNo = state != null ? state.getInt(STATE_SPOKE) : getIntent().getIntExtra(EXTRA_SPOKE, 1);
+
+        panel = findViewById(R.id.panel);
+        tvSide = findViewById(R.id.tvSide);
+        tvSpokeBig = findViewById(R.id.tvSpokeBig);
+        tvOfN = findViewById(R.id.tvOfN);
+        tvBig = findViewById(R.id.tvBig);
+        tvSmall = findViewById(R.id.tvSmall);
         btnPrev = findViewById(R.id.btnPrev);
         btnNext = findViewById(R.id.btnNext);
-        btnResults = findViewById(R.id.btnResults);
-        btnContinue = findViewById(R.id.btnContinue);
+        btnListen = findViewById(R.id.btnListen);
+        btnRetry = findViewById(R.id.btnRetry);
+        btnRetrySave = findViewById(R.id.btnRetrySave);
 
-        if (state != null) {
-            sessionId = state.getString(STATE_SESSION);
-            sessionCreated = state.getBoolean(STATE_SESSION_CREATED);
-            sessionLabel = state.getString(STATE_LABEL);
-            spokeNo = state.getInt(STATE_SPOKE, 1);
-            anchorSpoke = state.getInt(STATE_ANCHOR_SPOKE, 1);
-            anchorSide = state.getString(STATE_ANCHOR_SIDE, "L");
-            resumeSpoke = state.getInt(STATE_RESUME, 1);
-            complete = state.getBoolean(STATE_COMPLETE);
-            if (sessionLabel != null) etSession.setText(sessionLabel);
-        }
         btnPrev.setOnClickListener(v -> selectSpoke(spokeNo - 1));
         btnNext.setOnClickListener(v -> selectSpoke(spokeNo + 1));
-        btnListen.setOnClickListener(v -> requestRecording(PermissionAction.MANUAL));
-        btnAuto.setOnClickListener(v -> {
-            if (autoRunning) {
-                cancelAudio();
-                tvAutoStatus.setText(saving ? R.string.auto_stopped_saving : R.string.auto_stopped);
-                updateControls();
-            } else requestRecording(PermissionAction.AUTO);
+        btnListen.setOnClickListener(v -> {
+            if (listening) stopListening(); else requestListening();
         });
-        btnSave.setOnClickListener(v -> save());
-        btnContinue.setOnClickListener(v -> jumpTo(nextUnmeasured(resumeSpoke)));
-        btnResults.setOnClickListener(v -> {
-            if (sessionId == null || !sessionCreated) {
-                Toast.makeText(this, R.string.nothing_saved, Toast.LENGTH_SHORT).show();
-                return;
-            }
-            startActivity(new Intent(this, ResultActivity.class)
-                    .putExtra(EXTRA_WHEEL_ID, wheelId)
-                    .putExtra(ResultActivity.EXTRA_SESSION_ID, sessionId));
+        btnRetry.setOnClickListener(v -> selectSpoke(spokeNo));
+        btnRetrySave.setOnClickListener(v -> {
+            Reading r = pending;
+            pending = null;
+            if (r != null) save(r);
         });
-        rgSide.setOnCheckedChangeListener((group, id) -> {
-            if (settingSide || recording || autoRunning || saving) return;
-            // The user corrected the side: re-anchor so later spokes alternate from here.
-            anchorSpoke = spokeNo;
-            anchorSide = side();
-            clearReading();
-        });
+        findViewById(R.id.btnDone).setOnClickListener(v -> finish());
 
         updateControls();
-        tvResult.setText(R.string.loading);
+        show(NEUTRAL, getString(R.string.loading), "");
         repository.loadWheel(wheelId, w -> {
             if (destroyed) return;
             if (w == null) {
-                tvResult.setText(R.string.wheel_not_found);
+                show(RED, getString(R.string.wheel_not_found), "");
                 return;
             }
-            wheel = w;
-            setTitle(w.name);
-            ((RadioButton) findViewById(R.id.rbLeft)).setText(ReadingFormat.sideName(this, w, "L"));
-            ((RadioButton) findViewById(R.id.rbRight)).setText(ReadingFormat.sideName(this, w, "R"));
-            selectSpoke(Math.max(1, Math.min(spokeNo, w.spokeCount)));
-            if (state != null) restore(state);
-        }, e -> {
-            if (!destroyed) tvResult.setText(getString(R.string.load_failed, e.getMessage()));
-        });
+            if (w.spokesPerSide() < 1) {   // wheels saved before the even-count check
+                show(RED, getString(R.string.invalid_wheel), "");
+                return;
+            }
+            repository.loadReadings(wheelId, sessionId, readings -> {
+                if (destroyed) return;
+                wheel = w;
+                setTitle(w.name);
+                tvSide.setText(ReadingFormat.sideName(this, w, side));
+                tvOfN.setText(getString(R.string.of_n, w.spokesPerSide()));
+                sessionSaved = !readings.isEmpty();
+                for (Reading r : readings) if (side.equals(r.side) && !r.legacyNumbering()) measured.add(r.spokeNo);
+                selectSpoke(spokeNo);
+                requestListening();
+            }, this::loadFailed);
+        }, this::loadFailed);
     }
 
-    private void restore(Bundle state) {
-        double[] flat = state.getDoubleArray(STATE_PLUCKS);
-        if (flat != null)
-            for (int i = 0; i + 2 < flat.length; i += 3) plucks.add(new double[]{flat[i], flat[i + 1], flat[i + 2]});
-        complete = state.getBoolean(STATE_COMPLETE);
-        if (!plucks.isEmpty()) showManualReading();
-        if (complete) tvAutoStatus.setText(getString(R.string.auto_complete, wheel.spokeCount));
-        else if (state.getBoolean(STATE_INTERRUPTED)) tvAutoStatus.setText(R.string.auto_stopped);
-        boolean retrySave = state.getBoolean(STATE_SAVING) && !plucks.isEmpty();
-        if (retrySave) {
-            // Keep controls locked until the list is back and the interrupted save is re-issued.
-            saving = true;
-            tvAutoStatus.setText(R.string.auto_stopped_saving);
-        }
-        Runnable afterList = () -> {
-            refreshMeasured();
-            // The old instance may still finish its write. Reusing the same ids and values makes
-            // recovery idempotent. Done after the list loads so re-measure vs. new is judged right.
-            if (retrySave) saveReading(reading(spokeNo, side()), -1);
-            updateControls();
-        };
-        if (!sessionCreated) {
-            afterList.run();
-            return;
-        }
-        repository.loadReadings(wheelId, sessionId, readings -> {
-            if (destroyed) return;
-            for (Reading r : readings) measured.put(r.spokeNo, r);
-            afterList.run();
-        }, e -> {
-            if (!destroyed) afterList.run();
-        });
-        updateControls();
+    private void loadFailed(Exception e) {
+        if (!destroyed) show(RED, getString(R.string.load_failed, e.getMessage()), "");
     }
 
-    /** Side of a spoke: alternates spoke by spoke, starting from the side chosen for anchorSpoke. */
-    private String sideFor(int no) {
-        Reading saved = measured.get(no);
-        if (saved != null && saved.side != null) return saved.side;   // re-measure keeps its side
-        boolean same = Math.floorMod(no - anchorSpoke, 2) == 0;
-        return same ? anchorSide : ("L".equals(anchorSide) ? "R" : "L");
-    }
-
+    /** Listen for this spoke; also "measure again" for the current one. */
     private void selectSpoke(int no) {
-        if (wheel == null || no < 1 || no > wheel.spokeCount) return;
-        spokeNo = no;
-        settingSide = true;
-        rgSide.check("R".equals(sideFor(no)) ? R.id.rbRight : R.id.rbLeft);
-        settingSide = false;
-        tvSpoke.setText(getString(R.string.spoke_n_of, spokeNo, wheel.spokeCount));
-        clearReading();
-        if (!autoRunning) tvAutoStatus.setText(R.string.auto_hint);
-        refreshMeasured();
-    }
-
-    /** Re-measure an old spoke or continue; in auto mode the microphone keeps running. */
-    private void jumpTo(int no) {
-        if (wheel == null || no < 1 || saving || recording || (audioTaskActive && !autoRunning)) return;
-        // An accepted pluck is being analysed/saved (target already taken): its save would move on
-        // to the next spoke and override this jump, so ignore taps until it is done.
-        if (autoRunning && autoTarget.get() == null) return;
-        selectSpoke(no);
-        if (autoRunning) {
-            autoTarget.set(target());
-            tvAutoStatus.setText(getString(R.string.auto_waiting, spokeNo, wheel.spokeCount));
-            tvResult.setText(R.string.listening);
-        }
+        if (wheel == null) return;
+        spokeNo = Math.floorMod(no - 1, wheel.spokesPerSide()) + 1;
+        pending = null;
+        main.removeCallbacks(nextSpoke);   // cancel a pending green -> next, nothing else
+        tvSpokeBig.setText(String.valueOf(spokeNo));
+        String already = measured.contains(spokeNo) ? getString(R.string.already_measured) : "";
+        if (listening) {
+            target.set(newTarget());
+            show(NEUTRAL, getString(R.string.pluck_now), already);
+        } else show(NEUTRAL, getString(R.string.tap_listen), already);
         updateControls();
     }
 
-    /** First spoke without a saved reading, scanning from start and wrapping around; -1 if none. */
-    private int nextUnmeasured(int start) {
-        if (wheel == null) return -1;
-        int n = wheel.spokeCount;
-        for (int i = 0; i < n; i++) {
-            int no = Math.floorMod(start - 1 + i, n) + 1;
-            if (!measured.containsKey(no)) return no;
-        }
-        return -1;
-    }
-
-    private void clearReading() {
-        plucks.clear();
-        pendingSave = null;
-        complete = false;
-        tvResult.setText(R.string.pluck_hint);
-        updateControls();
-    }
-
-    private String side() {
-        return rgSide.getCheckedRadioButtonId() == R.id.rbRight ? "R" : "L";
-    }
-
-    private Material material() {
-        return Material.valueOf(wheel.material);
-    }
-
-    private CaptureTarget target() {
-        String side = side();
+    private Target newTarget() {
         double lengthCm = wheel.lengthMm(side) / 10.0;
-        double density = material().densityKgM3;
-        return new CaptureTarget(spokeNo, side,
-                new PitchDetector.Params(lengthCm, wheel.diameterMm, density),
+        double density = Material.valueOf(wheel.material).densityKgM3;
+        return new Target(spokeNo, new PitchDetector.Params(lengthCm, wheel.diameterMm, density),
                 SignalAnalyzer.bandFromTension(SoundTensionCalculator.MIN_TENSION_KGF,
                         SoundTensionCalculator.MAX_TENSION_KGF, lengthCm, wheel.diameterMm, density));
     }
 
-    /** FFT and MatrixPencil on the window after the onset Sally used, so all three share one pluck. */
-    private static double[] otherMethods(double[] x, int onset, CaptureTarget target) {
-        return SignalAnalyzer.fftAndMatrixPencil(SignalAnalyzer.windowAt(x, FS, onset),
-                FS, target.band[0], target.band[1]);
-    }
-
-    private void requestRecording(PermissionAction action) {
-        if (!visible || wheel == null || recording || autoRunning || saving || audioTaskActive) return;
+    private void requestListening() {
+        if (!visible || wheel == null || listening) return;
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            permissionAction = action;
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_MIC);
             return;
         }
-        permissionAction = PermissionAction.NONE;
-        if (action == PermissionAction.AUTO) startAuto(); else listen();
+        listening = true;
+        final int gen = ++generation;
+        selectSpoke(spokeNo);
+        executor.execute(() -> captureLoop(gen));
     }
 
-    private void listen() {
-        recording = true;
-        audioTaskActive = true;
-        complete = false;
-        final int generation = ++audioGeneration;
-        final CaptureTarget target = target();
-        tvResult.setText(R.string.listening);
-        updateControls();
-        executor.execute(() -> {
-            try (AudioCapture.Stream stream = AudioCapture.openStream(getApplicationContext(), FS)) {
-                activeStream = stream;
-                short[] pcm = new short[FS * MANUAL_SECONDS];
-                short[] buffer = new short[1024];
-                int offset = 0;
-                while (generation == audioGeneration && offset < pcm.length) {
-                    int count = stream.read(buffer);
-                    if (count < 0) return;
-                    int copy = Math.min(count, pcm.length - offset);
-                    System.arraycopy(buffer, 0, pcm, offset, copy);
-                    offset += copy;
+    private void captureLoop(int gen) {
+        try (AudioCapture.Stream stream = AudioCapture.openStream(getApplicationContext(), FS)) {
+            activeStream = stream;
+            PluckSegmenter segmenter = new PluckSegmenter(FS);
+            Target previous = null;
+            short[] buffer = new short[1024];
+            while (gen == generation && listening) {
+                Target beforeRead = target.get();
+                int count = stream.read(buffer);
+                if (count < 0) break;
+                Target current = target.get();
+                if (current != previous || current != beforeRead) {
+                    // Target changed: drop boundary audio so it is never assigned to the new spoke.
+                    segmenter.reset();
+                    previous = current;
+                    continue;
                 }
-                if (generation != audioGeneration) return;
-                double[] x = AudioCapture.toDouble(pcm);
-                PitchDetector.Report report = PitchDetector.analyze(x, FS, target.params);
-                // Recording is finished, so the slower methods no longer compete with the mic.
-                double[] other = usable(report) && report.tap != null
-                        ? otherMethods(x, report.tap.onsetSample, target) : null;
-                main.post(() -> {
-                    if (destroyed || !visible || generation != audioGeneration) return;
-                    if (other != null) {
-                        addPluck(new double[]{report.finalHz, other[0], other[1]});
-                        pendingSave = null;
-                        showManualReading();
-                    } else tvResult.setText(report.explanation);
-                });
-            } catch (Exception e) {
-                reportAudioError(generation, e);
-            } finally {
-                finishAudioTask(generation);
-            }
-        });
-    }
-
-    private void addPluck(double[] pluck) {
-        if (plucks.size() == PLUCKS) plucks.remove(0);
-        plucks.add(pluck);
-    }
-
-    /** One method's values across the current plucks. */
-    private List<Double> column(int method) {
-        List<Double> out = new ArrayList<>();
-        for (double[] p : plucks) out.add(p[method]);
-        return out;
-    }
-
-    private void startAuto() {
-        clearReading();
-        autoRunning = true;
-        audioTaskActive = true;
-        final int generation = ++audioGeneration;
-        autoTarget.set(target());
-        tvAutoStatus.setText(getString(R.string.auto_waiting, spokeNo, wheel.spokeCount));
-        tvResult.setText(R.string.listening);
-        updateControls();
-        executor.execute(() -> {
-            try (AudioCapture.Stream stream = AudioCapture.openStream(getApplicationContext(), FS)) {
-                activeStream = stream;
-                PluckSegmenter segmenter = new PluckSegmenter(FS);
-                CaptureTarget previous = null;
-                short[] buffer = new short[1024];
-                while (generation == audioGeneration && autoRunning) {
-                    CaptureTarget beforeRead = autoTarget.get();
-                    int count = stream.read(buffer);
-                    if (count < 0) break;
-                    CaptureTarget current = autoTarget.get();
-                    if (current != previous || current != beforeRead) {
-                        segmenter.reset();
-                        previous = current;
-                        // Discard boundary audio: it may have started during the previous save.
+                if (current == null) continue;   // busy: keep draining the mic, queue nothing
+                for (PluckSegmenter.Segment seg : segmenter.accept(buffer, count)) {
+                    if (gen != generation || target.get() != current) break;
+                    PitchDetector.Report report = PitchDetector.analyzeAtOnset(
+                            seg.samples, FS, current.params, seg.onsetSample);
+                    if (!(report.finalHz > 0)) {
+                        // No candidate at all (noise, bump): keep listening, skip the slow MP.
+                        main.post(() -> noPluck(gen, current, report.explanation));
                         continue;
                     }
-                    // Drain the mic during a save; never queue plucks for the next spoke.
-                    if (current == null) continue;
-                    for (PluckSegmenter.Segment segment : segmenter.accept(buffer, count)) {
-                        if (generation != audioGeneration || autoTarget.get() != current) break;
-                        PitchDetector.Report report = PitchDetector.analyzeAtOnset(
-                                segment.samples, FS, current.params, segment.onsetSample);
-                        if (usable(report)) {
-                            if (autoTarget.compareAndSet(current, null)) {
-                                // Off the capture thread: MatrixPencil is slow and the mic must keep draining.
-                                analysisExecutor.execute(() -> {
-                                    double[] other = otherMethods(segment.samples, segment.onsetSample, current);
-                                    main.post(() -> acceptAuto(generation, current,
-                                            new double[]{report.finalHz, other[0], other[1]}));
-                                });
-                            }
-                            break;
-                        }
-                        main.post(() -> {
-                            if (!destroyed && visible && generation == audioGeneration
-                                    && autoRunning && autoTarget.get() == current) {
-                                tvResult.setText(getString(R.string.auto_retry, report.explanation));
-                            }
-                        });
-                    }
+                    if (!target.compareAndSet(current, null)) break;
+                    analysisExecutor.execute(() -> {
+                        double[] fftMp = SignalAnalyzer.fftAndMatrixPencil(
+                                SignalAnalyzer.windowAt(seg.samples, FS, seg.onsetSample),
+                                FS, current.band[0], current.band[1]);
+                        main.post(() -> analysed(gen, current, report, fftMp[0], fftMp[1]));
+                    });
+                    break;
                 }
-            } catch (Exception e) {
-                reportAudioError(generation, e);
-            } finally {
-                finishAudioTask(generation);
             }
-        });
+        } catch (Exception e) {
+            main.post(() -> {
+                if (destroyed || gen != generation) return;
+                stopListening();
+                show(RED, getString(R.string.record_failed, String.valueOf(e)), "");
+            });
+        } finally {
+            activeStream = null;
+            main.post(() -> {
+                if (!destroyed && gen == generation && listening) stopListening();
+            });
+        }
     }
 
     private static boolean usable(PitchDetector.Report report) {
@@ -443,197 +269,145 @@ public class MeasureActivity extends AppCompatActivity {
                 && report.verdict != PitchDetector.Verdict.DISAGREE;
     }
 
-    private void acceptAuto(int generation, CaptureTarget target, double[] pluck) {
-        if (destroyed || !visible || !autoRunning || generation != audioGeneration || saving) return;
-        plucks.clear();
-        plucks.add(pluck);
-        Reading reading = reading(target.spokeNo, target.side);
-        tvResult.setText(getString(R.string.auto_detected, pluck[SALLY], reading.tensionKgf,
-                reading.status.toUpperCase(Locale.US), ReadingFormat.methodsLine(pluck[SALLY], pluck[FFT], pluck[MP])));
-        tvAutoStatus.setText(getString(R.string.auto_saving, reading.spokeNo));
-        saveReading(reading, generation);
+    private boolean live(int gen) {
+        return listening && gen == generation;
     }
 
-    private void showManualReading() {
-        double hz = ReadingFormat.median(column(SALLY));
-        double kgf = kgf(hz, side());
-        SafetyJudge.Status status = SafetyJudge.judge(kgf, wheel.rimMaxKgf, Double.NaN);
-        StringBuilder raw = new StringBuilder();
-        for (double[] p : plucks) raw.append(String.format(Locale.US, "%.1f  ", p[SALLY]));
-        tvResult.setText(getString(R.string.measure_result, raw.toString().trim(), plucks.size(), PLUCKS,
-                hz, kgf, status.name(), ReadingFormat.methodsLine(hz,
-                        ReadingFormat.medianFinite(column(FFT)), ReadingFormat.medianFinite(column(MP)))));
-        updateControls();
+    /** Sally found nothing: show why, the same target keeps listening. */
+    private void noPluck(int gen, Target t, String why) {
+        if (destroyed || !live(gen) || target.get() != t) return;
+        show(RED, getString(R.string.measure_again), why);
     }
 
-    private double kgf(double hz, String side) {
-        return SoundTensionCalculator.kgf(hz, wheel.lengthMm(side) / 1000.0,
-                wheel.diameterMm / 1000.0, material());
+    /** Red: show why and listen for the same spoke again. */
+    private void rejected(int gen, Target t, String why) {
+        if (destroyed || t.spokeNo != spokeNo) return;
+        show(RED, getString(R.string.measure_again), why);
+        if (live(gen)) target.set(newTarget());
     }
 
-    private Reading reading(int no, String side) {
+    /** "Sally 346.1 · MP 345.9 · FFT 346.0 Hz"; — = not found. */
+    private static String methods(double sally, double mp, double fft) {
+        return String.format(Locale.US, "Sally %s · MP %s · FFT %s Hz", fmt(sally), fmt(mp), fmt(fft));
+    }
+
+    private static String fmt(double hz) {
+        return hz > 0 ? String.format(Locale.US, "%.1f", hz) : "—";
+    }
+
+    private void analysed(int gen, Target t, PitchDetector.Report report, double fft, double mp) {
+        if (destroyed || t.spokeNo != spokeNo) return;   // kept even if Stop was tapped meanwhile
+        double sally = report.finalHz;
+        String values = methods(sally, mp, fft);
+        if (!usable(report)) {
+            rejected(gen, t, report.explanation + "\n" + values);
+            return;
+        }
+        double hz = SafetyJudge.combineHz(sally, mp);
+        if (Double.isNaN(hz)) {
+            rejected(gen, t, (Double.isFinite(mp)
+                    ? getString(R.string.why_disagree, sally, mp, Math.abs(sally - mp), SafetyJudge.AGREE_HZ)
+                    : getString(R.string.why_no_mp, sally)) + "\n" + values);
+            return;
+        }
         Reading r = new Reading();
-        r.spokeNo = no;
+        r.spokeNo = t.spokeNo;
         r.side = side;
-        r.freqHz = column(SALLY);
-        r.fftHz = column(FFT);
-        r.mpHz = column(MP);
-        r.freqMedianHz = ReadingFormat.median(r.freqHz);
-        r.tensionKgf = kgf(r.freqMedianHz, side);
-        r.relativePercent = Double.NaN;
-        r.status = SafetyJudge.judge(r.tensionKgf, wheel.rimMaxKgf, Double.NaN)
+        r.freqHz = Collections.singletonList(sally);
+        r.fftHz = Collections.singletonList(fft);
+        r.mpHz = Collections.singletonList(mp);
+        r.freqMedianHz = hz;
+        r.tensionKgf = SoundTensionCalculator.kgf(hz, wheel.lengthMm(side) / 1000.0,
+                wheel.diameterMm / 1000.0, Material.valueOf(wheel.material));
+        double expect = wheel.expectKgf(side);
+        r.relativePercent = expect > 0 ? (r.tensionKgf / expect - 1) * 100 : Double.NaN;
+        r.status = SafetyJudge.judge(r.tensionKgf, wheel.rimMaxKgf, wheel.expectKgf(side))
                 .name().toLowerCase(Locale.US);
-        return r;
+        save(r);
     }
 
-    private void save() {
-        if (saving || recording || autoRunning || plucks.isEmpty()) return;
-        saveReading(pendingSave != null ? pendingSave : reading(spokeNo, side()), -1);
-    }
-
-    private void saveReading(Reading reading, int autoGeneration) {
-        // Snapshot before any asynchronous request. Retries reuse both document ids and this reading.
-        pendingSave = reading;
-        saving = true;
-        if (sessionId == null) {
-            sessionId = UUID.randomUUID().toString();
-            sessionLabel = etSession.getText().toString().trim();
-            if (sessionLabel.isEmpty()) sessionLabel = "before";
-        }
-        final String savingSession = sessionId;
+    private void save(Reading r) {
+        target.set(null);   // no second pluck for this spoke while its save is in flight
+        show(NEUTRAL, getString(R.string.saving), "");
         updateControls();
-        if (sessionCreated) persistReading(reading, savingSession, autoGeneration);
-        else repository.saveSession(wheelId, savingSession, new Session(sessionLabel), unused -> {
-            sessionCreated = true;
-            // Finish an already accepted save even if the screen was stopped in the meantime.
-            persistReading(reading, savingSession, autoGeneration);
-        }, e -> saveFailed(reading, e));
+        if (sessionSaved) persist(r);
+        else repository.saveSession(wheelId, sessionId, new Session(sessionLabel), unused -> {
+            sessionSaved = true;
+            persist(r);
+        }, e -> saveFailed(r, e));
     }
 
-    private void persistReading(Reading reading, String savingSession, int autoGeneration) {
-        repository.saveReading(wheelId, savingSession, reading, unused -> {
-            if (destroyed || pendingSave != reading) return;
-            saving = false;
-            pendingSave = null;
-            boolean remeasure = measured.containsKey(reading.spokeNo);
-            measured.put(reading.spokeNo, reading);
-            int after = reading.spokeNo % wheel.spokeCount + 1;
-            if (!remeasure) resumeSpoke = after;
-            // New spoke: go on to the next one. Re-measured old spoke: return to where we left off.
-            int next = nextUnmeasured(remeasure ? resumeSpoke : after);
-            if (next < 0) {
-                cancelAudio();
-                complete = true;
-                plucks.clear();
-                tvAutoStatus.setText(getString(R.string.auto_complete, wheel.spokeCount));
-                refreshMeasured();
-            } else {
-                selectSpoke(next);
-                if (visible && autoRunning && autoGeneration == audioGeneration) {
-                    tvAutoStatus.setText(getString(R.string.auto_saved_waiting, reading.spokeNo,
-                            reading.freqMedianHz, reading.tensionKgf, spokeNo, wheel.spokeCount));
-                    tvResult.setText(R.string.listening);
-                    autoTarget.set(target());
-                } else if (visible) Toast.makeText(this, R.string.saved, Toast.LENGTH_SHORT).show();
-            }
-            updateControls();
-        }, e -> saveFailed(reading, e));
-    }
-
-    private void saveFailed(Reading reading, Exception e) {
-        if (destroyed || pendingSave != reading) return;
-        saving = false;
-        cancelAudio();
-        tvAutoStatus.setText(getString(R.string.auto_save_failed, e.getMessage()));
-        updateControls();
-    }
-
-    /** One row per saved spoke; tapping a row measures that spoke again. */
-    private void refreshMeasured() {
-        if (wheel == null) return;
-        measuredList.removeAllViews();
-        tvMeasuredHeader.setText(getString(R.string.measured_header, measured.size(), wheel.spokeCount));
-        int pad = (int) (8 * getResources().getDisplayMetrics().density);
-        for (Reading r : measured.values()) {
-            TextView row = new TextView(this);
-            row.setText(ReadingFormat.rowText(this, wheel, r));
-            row.setPadding(pad, pad, pad, pad);
-            row.setBackgroundColor(ReadingFormat.color(r.status));
-            if (r.spokeNo == spokeNo) row.setTypeface(Typeface.DEFAULT_BOLD);
-            final int no = r.spokeNo;
-            row.setOnClickListener(v -> jumpTo(no));
-            measuredList.addView(row);
-        }
-        updateControls();
-    }
-
-    /** Stop is independent of Firestore: pending writes may finish, but cannot restart the microphone. */
-    private void cancelAudio() {
-        ++audioGeneration;
-        autoRunning = false;
-        recording = false;
-        autoTarget.set(null);
-        AudioCapture.Stream stream = activeStream;
-        if (stream != null) stream.stop();
-    }
-
-    private void reportAudioError(int generation, Exception e) {
-        main.post(() -> {
-            if (destroyed || generation != audioGeneration) return;
-            cancelAudio();
-            tvAutoStatus.setText(R.string.auto_stopped);
-            tvResult.setText(getString(R.string.record_failed, String.valueOf(e)));
-            updateControls();
-        });
-    }
-
-    private void finishAudioTask(int generation) {
-        activeStream = null;
-        main.post(() -> {
+    /** Saved: green, or orange when above the rim limit (likely a mis-read; the user can go back). */
+    private void persist(Reading r) {
+        repository.saveReading(wheelId, sessionId, r, unused -> {
             if (destroyed) return;
-            audioTaskActive = false;
-            if (generation == audioGeneration) {
-                recording = false;
-                if (autoRunning) {
-                    cancelAudio();
-                    tvAutoStatus.setText(R.string.auto_stopped);
-                }
+            measured.add(r.spokeNo);
+            if (r.spokeNo != spokeNo) return;   // the user already moved to another spoke
+            boolean over = r.tensionKgf > wheel.rimMaxKgf;
+            String small = getString(R.string.spoke_saved, r.spokeNo) + "\n"
+                    + methods(r.freqHz.get(0), r.mpHz.get(0), r.fftHz.get(0))
+                    + (over ? "\n" + getString(R.string.why_over_limit, r.tensionKgf, wheel.rimMaxKgf) : "");
+            show(over ? ORANGE : GREEN,
+                    String.format(Locale.US, "%.1f kgf\n%.1f Hz", r.tensionKgf, r.freqMedianHz), small);
+            main.postDelayed(nextSpoke, over ? 2 * GREEN_MS : GREEN_MS);
+        }, e -> saveFailed(r, e));
+    }
+
+    private void saveFailed(Reading r, Exception e) {
+        if (destroyed) return;
+        if (r.spokeNo != spokeNo) selectSpoke(r.spokeNo);   // go back so the failure is not missed
+        target.set(null);   // hold the mic until the user retries or measures again
+        pending = r;   // "Retry save" saves it again
+        show(RED, getString(R.string.save_failed, e.getMessage()), "");
+        updateControls();
+    }
+
+    /** Next unmeasured spoke after the current one, wrapping; the side is done when none is left. */
+    private void next() {
+        int n = wheel.spokesPerSide();
+        for (int i = 1; i <= n; i++) {
+            int no = Math.floorMod(spokeNo - 1 + i, n) + 1;
+            if (!measured.contains(no)) {
+                selectSpoke(no);
+                return;
             }
-            updateControls();
-        });
+        }
+        stopListening();
+        show(GREEN, getString(R.string.side_done), getString(R.string.side_done_hint));
+    }
+
+    private void stopListening() {
+        ++generation;
+        listening = false;
+        target.set(null);
+        AudioCapture.Stream s = activeStream;
+        if (s != null) s.stop();
+        updateControls();
+    }
+
+    private void show(int color, String big, String small) {
+        panel.setBackgroundColor(color);
+        tvBig.setText(big);
+        tvSmall.setText(small);
+        tvSmall.setVisibility(small.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
     private void updateControls() {
-        boolean busy = recording || autoRunning || saving;
-        boolean idle = wheel != null && !busy && !audioTaskActive;
-        // Jumping (row tap / Continue) also works while auto mode is listening, but not mid-save.
-        boolean canJump = idle || (autoRunning && !saving);
-        btnAuto.setText(autoRunning ? R.string.auto_stop : R.string.auto_start);
-        btnAuto.setEnabled(autoRunning || idle);
-        btnListen.setEnabled(idle);
-        btnSave.setEnabled(idle && !plucks.isEmpty());
-        btnPrev.setEnabled(idle && spokeNo > 1);
-        btnNext.setEnabled(idle && wheel != null && spokeNo < wheel.spokeCount);
-        btnResults.setEnabled(idle && sessionCreated);
-        etSession.setEnabled(idle && sessionId == null);
-        for (int i = 0; i < rgSide.getChildCount(); i++) rgSide.getChildAt(i).setEnabled(idle);
-        for (int i = 0; i < measuredList.getChildCount(); i++) measuredList.getChildAt(i).setEnabled(canJump);
-        int next = nextUnmeasured(resumeSpoke);
-        boolean showContinue = !measured.isEmpty() && next > 0 && next != spokeNo;
-        btnContinue.setVisibility(showContinue ? View.VISIBLE : View.GONE);
-        if (showContinue) btnContinue.setText(getString(R.string.continue_from, next));
-        btnContinue.setEnabled(canJump);
+        boolean choice = pending != null;
+        btnRetry.setVisibility(choice ? View.VISIBLE : View.GONE);
+        btnRetrySave.setVisibility(choice ? View.VISIBLE : View.GONE);
+        btnListen.setText(listening ? R.string.stop : R.string.listen);
+        btnListen.setEnabled(wheel != null);
+        btnPrev.setEnabled(wheel != null);
+        btnNext.setEnabled(wheel != null);
     }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grants) {
         super.onRequestPermissionsResult(requestCode, permissions, grants);
-        if (requestCode != REQUEST_MIC) return;
-        PermissionAction action = permissionAction;
-        permissionAction = PermissionAction.NONE;
-        if (destroyed || !visible || action == PermissionAction.NONE) return;
-        if (grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) requestRecording(action);
-        else tvResult.setText(R.string.mic_required);
+        if (requestCode != REQUEST_MIC || destroyed) return;
+        if (grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) requestListening();
+        else show(RED, getString(R.string.mic_required), "");
     }
 
     @Override
@@ -645,36 +419,27 @@ public class MeasureActivity extends AppCompatActivity {
     @Override
     protected void onStop() {
         visible = false;
-        permissionAction = PermissionAction.NONE;
-        boolean wasRecording = recording || autoRunning;
-        cancelAudio();
-        if (wasRecording) tvAutoStatus.setText(saving ? R.string.auto_stopped_saving : R.string.auto_stopped);
-        updateControls();
+        if (listening) {
+            stopListening();
+            // Only replace the live prompt; keep red reasons, Saving… and green results.
+            if (getString(R.string.pluck_now).contentEquals(tvBig.getText()))
+                show(NEUTRAL, getString(R.string.tap_listen), "");
+        }
         super.onStop();
     }
 
     @Override
     protected void onSaveInstanceState(Bundle out) {
-        out.putString(STATE_SESSION, sessionId);
-        out.putBoolean(STATE_SESSION_CREATED, sessionCreated);
-        out.putString(STATE_LABEL, sessionLabel != null ? sessionLabel : etSession.getText().toString());
+        // ponytail: an orange reading awaiting a choice is dropped on rotation; pluck that spoke again.
         out.putInt(STATE_SPOKE, spokeNo);
-        out.putInt(STATE_ANCHOR_SPOKE, anchorSpoke);
-        out.putString(STATE_ANCHOR_SIDE, anchorSide);
-        out.putInt(STATE_RESUME, resumeSpoke);
-        double[] flat = new double[plucks.size() * 3];
-        for (int i = 0; i < plucks.size(); i++) System.arraycopy(plucks.get(i), 0, flat, i * 3, 3);
-        out.putDoubleArray(STATE_PLUCKS, flat);
-        out.putBoolean(STATE_COMPLETE, complete);
-        out.putBoolean(STATE_INTERRUPTED, recording || autoRunning || saving);
-        out.putBoolean(STATE_SAVING, saving);
         super.onSaveInstanceState(out);
     }
 
     @Override
     protected void onDestroy() {
         destroyed = true;
-        cancelAudio();
+        main.removeCallbacksAndMessages(null);
+        stopListening();
         executor.shutdownNow();
         analysisExecutor.shutdownNow();
         super.onDestroy();

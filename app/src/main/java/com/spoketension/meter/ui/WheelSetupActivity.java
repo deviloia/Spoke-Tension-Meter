@@ -14,11 +14,11 @@ import com.spoketension.meter.calc.Material;
 import com.spoketension.meter.data.FirestoreRepository;
 import com.spoketension.meter.data.model.Wheel;
 
-/** Enter a wheel: name, spoke count, front/rear, left/right length, diameter, material, rim limit. */
+/** Enter a wheel: name, spoke count, front/rear, left/right length, diameter, material, rim limit, expected tension per side. */
 public class WheelSetupActivity extends AppCompatActivity {
 
     private final FirestoreRepository repository = new FirestoreRepository();
-    private EditText etName, etSpokes, etLenL, etLenR, etDiameter, etRimMax;
+    private EditText etName, etSpokes, etLenL, etLenR, etDiameter, etRimMax, etExpL, etExpR;
     private RadioGroup rgPosition;
     private Spinner spMaterial;
 
@@ -32,6 +32,8 @@ public class WheelSetupActivity extends AppCompatActivity {
         etLenR = findViewById(R.id.etLengthRight);
         etDiameter = findViewById(R.id.etDiameter);
         etRimMax = findViewById(R.id.etRimMax);
+        etExpL = findViewById(R.id.etExpectLeft);
+        etExpR = findViewById(R.id.etExpectRight);
         rgPosition = findViewById(R.id.rgPosition);
         spMaterial = findViewById(R.id.spMaterial);
         spMaterial.setAdapter(new ArrayAdapter<>(this,
@@ -48,7 +50,10 @@ public class WheelSetupActivity extends AppCompatActivity {
             w.lengthRightMm = Double.parseDouble(etLenR.getText().toString());
             w.diameterMm = Double.parseDouble(etDiameter.getText().toString());
             w.rimMaxKgf = Double.parseDouble(etRimMax.getText().toString());
-            if (w.name.isEmpty() || w.spokeCount <= 0 || !(w.lengthLeftMm > 0) || !(w.lengthRightMm > 0)
+            w.expectLeftKgf = Double.parseDouble(etExpL.getText().toString());
+            w.expectRightKgf = Double.parseDouble(etExpR.getText().toString());
+            if (w.name.isEmpty() || w.spokeCount < 2 || w.spokeCount % 2 != 0
+                    || !(w.expectLeftKgf > 0) || !(w.expectRightKgf > 0) || !(w.lengthLeftMm > 0) || !(w.lengthRightMm > 0)
                     || !(w.diameterMm > 0) || !(w.rimMaxKgf > 0))
                 throw new NumberFormatException();
         } catch (NumberFormatException e) {

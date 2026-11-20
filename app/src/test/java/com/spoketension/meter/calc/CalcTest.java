@@ -28,4 +28,11 @@ public class CalcTest {
         assertEquals(SafetyJudge.Status.OK, SafetyJudge.judge(95, 120, 100));
         assertEquals(SafetyJudge.Status.OK, SafetyJudge.judge(60, 120, Double.NaN));
     }
+
+    @Test
+    public void sallyAndMatrixPencilMustAgree() {
+        assertEquals(348, SafetyJudge.combineHz(346, 350), 1e-9);
+        assertEquals(Double.NaN, SafetyJudge.combineHz(346, 352), 0);
+        assertEquals(Double.NaN, SafetyJudge.combineHz(346, Double.NaN), 0);
+    }
 }

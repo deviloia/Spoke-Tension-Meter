@@ -85,6 +85,20 @@
             android:inputType="numberDecimal"
             android:text="120" />
 
+        <EditText
+            android:id="@+id/etExpectLeft"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/expect_left"
+            android:inputType="numberDecimal" />
+
+        <EditText
+            android:id="@+id/etExpectRight"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/expect_right"
+            android:inputType="numberDecimal" />
+
         <Button
             android:id="@+id/btnSave"
             android:layout_width="match_parent"

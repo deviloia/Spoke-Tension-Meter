@@ -64,11 +64,20 @@ public class FirestoreRepository {
                 .addOnFailureListener(onError);
     }
 
-    /** Save one spoke; the spoke number is the document id, so re-measuring overwrites it. */
+    /** Save one spoke; side + number is the document id ("R5"), so re-measuring overwrites it. */
     public void saveReading(String wheelId, String sessionId, Reading reading,
                             OnSuccessListener<Void> onDone, OnFailureListener onError) {
-        readings(wheelId, sessionId).document(String.valueOf(reading.spokeNo)).set(reading)
+        readings(wheelId, sessionId).document(reading.side + reading.spokeNo).set(reading)
                 .addOnSuccessListener(onDone)
+                .addOnFailureListener(onError);
+    }
+
+    /** Newest session of a wheel, or null if it has none. */
+    public void loadLatestSession(String wheelId, OnSuccessListener<Session> onDone, OnFailureListener onError) {
+        wheels().document(wheelId).collection("sessions")
+                .orderBy("createdAt", Query.Direction.DESCENDING).limit(1).get()
+                .addOnSuccessListener(snap -> onDone.onSuccess(
+                        snap.isEmpty() ? null : snap.getDocuments().get(0).toObject(Session.class)))
                 .addOnFailureListener(onError);
     }
 
